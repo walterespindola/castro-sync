@@ -1,0 +1,33 @@
+; =============================================================================
+; sync_envio.ini — Envio automatico InterBase -> MySQL (app movil)
+; Copiar a sync_envio.ini y completar con valores reales.
+; =============================================================================
+;
+; INSTALACION
+; -----------
+; 1. Copiar la carpeta envio\ completa al servidor (incluye fdb\)
+; 2. Python 3.12 de 32 BITS (obligatorio — gds32.dll es 32-bit)
+; 3. Ejecutar install.bat (instala mysql-connector-python via pip)
+; 4. Copiar este archivo a sync_envio.ini y ajustar valores
+; 5. Probar:  py -3.12-32 sync_envio.py --dry-run
+; 6. Ejecutar agregar_tarea.bat como Administrador
+;
+; NOTA: el ejercicio se calcula automaticamente como (anio actual - 1).
+; =============================================================================
+
+[gestion]
+empresa = 2
+canal   = 3
+
+[mysql]
+host     = SERVIDOR_MYSQL
+user     = USUARIO_MYSQL
+password = PASSWORD_MYSQL
+database = NOMBRE_BD
+
+[interbase]
+host     = localhost
+database = C:\Ruta\A\LA_BASE.MDF
+user     = SYSDBA
+password = masterkey
+gds32    = C:\Ruta\A\gds32.dll

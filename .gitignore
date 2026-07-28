@@ -1,0 +1,9 @@
+# Config con passwords — copiar .ini.example y completar con valores reales
+*.ini
+
+# Logs generados en ejecucion
+*.log
+
+# Python cache
+__pycache__/
+*.py[cod]
