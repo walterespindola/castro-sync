@@ -7,13 +7,23 @@ set SCRIPT=%SCRIPT_DIR%sync_envio.py
 set TASK_NAME=CastroSyncEnvio
 
 :: ── Detectar Python 32-bit ────────────────────────────────────────────────────
+:: NO usar "py -3.12-32" porque SYSTEM puede no tenerlo en PATH.
+:: Siempre usar ruta completa al ejecutable.
 set PYTHON_EXE=
 
-:: 1) py launcher
-where py >nul 2>&1
-if %errorlevel% equ 0 (
-    set PYTHON_EXE=py -3.12-32
-    goto :found
+:: 1) Instalacion para todos los usuarios (preferida para tareas SYSTEM)
+for %%P in (
+    "C:\Program Files (x86)\Python312-32\python.exe"
+    "C:\Program Files (x86)\Python312\python.exe"
+    "C:\Program Files\Python312-32\python.exe"
+    "C:\Program Files\Python312\python.exe"
+    "C:\Python312-32\python.exe"
+    "C:\Python312\python.exe"
+) do (
+    if exist %%P (
+        set PYTHON_EXE=%%P
+        goto :found
+    )
 )
 
 :: 2) Instalacion per-usuario (AppData) — ruta del usuario actual
