@@ -379,7 +379,7 @@ def enviar_articulos(cur_ib, cur_my, con_my,
                 (imei,
                  r.get('ARTICULO') or '',
                  r.get('TIT_ARTICULO') or '',
-                 as_float(r.get('PVP')),
+                 round(as_float(r.get('PVP')) or 0.0, 2),
                  as_float(r.get('EXISTENCIAS')),
                  rubro,
                  as_float(r.get('P_BASE_IMPO')),
@@ -424,7 +424,7 @@ def enviar_precios(cur_ib, cur_my, con_my,
                 (imei,
                  r.get('TARIFA') or '',
                  r.get('ARTICULO') or '',
-                 as_float(r.get('PVP')),
+                 round(as_float(r.get('PVP')) or 0.0, 2),
                 )
             )
         count += 1
@@ -603,7 +603,7 @@ def enviar_articulos_rep(cur_ib, cur_my, con_my,
                 (imei,
                  r.get('ARTICULO') or '',
                  r.get('TIT_ARTICULO') or '',
-                 as_float(r.get('PVP')),
+                 round(as_float(r.get('PVP')) or 0.0, 2),
                  as_float(r.get('EXISTENCIAS')),
                  rubro,
                  as_float(r.get('P_BASE_IMPO')),
@@ -737,7 +737,7 @@ def enviar_facturas(cur_ib, cur_my, con_my,
     for d in dets:
         unidades = as_float(d.get('UNIDADES'))
         c_iva    = as_float(d.get('C_IVA'))
-        precio   = as_float(d.get('PRECIO')) + (c_iva / unidades if unidades else 0.0)
+        precio   = round(as_float(d.get('PRECIO')) + (c_iva / unidades if unidades else 0.0), 2)
 
         if dry_run:
             log.info('  [DRY] det art=%s "%s" u=%.0f p=%.4f',
