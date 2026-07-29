@@ -30,7 +30,9 @@ if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" (
 for %%P in (
     "C:\Python312-32\python.exe"
     "C:\Python312\python.exe"
+    "C:\Program Files (x86)\Python312-32\python.exe"
     "C:\Program Files (x86)\Python312\python.exe"
+    "C:\Program Files\Python312-32\python.exe"
     "C:\Program Files\Python312\python.exe"
 ) do (
     if exist %%P (
