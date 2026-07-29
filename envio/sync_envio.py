@@ -289,63 +289,80 @@ def _row_dict(cur, row):
     return {d[0]: _clean(v) for d, v in zip(cur.description, row)}
 
 
+_SQL_INS_CLIENTES = (
+    'INSERT INTO cli_clientes '
+    '(imei,cliente,denominacion,direccion,localidad,telefonos,cuit_dni,'
+    'notas,riesgo,iva,p_desc,omite_disp,cobra_dgr,limite_credito,tarifa,'
+    'cant_versiones,categoria,p_dgr_excl,prioridad,sync,latitud,longitud)'
+    ' VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,%s,%s)'
+)
+
+def _cli_tuple(imei, r):
+    return (
+        imei,
+        as_int(r.get('CLIENTE')),
+        r.get('TIT_CLIENTE') or '',
+        get_direccion(r),
+        r.get('TIT_LOCALIDAD') or '',
+        get_telefonos(r),
+        r.get('NIF') or '',
+        (r.get('NOTAS') or '')[:255],
+        as_float(r.get('RIESGO_ACT')),
+        mapear_iva(r.get('MODO_IVA')),
+        as_float(r.get('DESCUENTO_CIAL')),
+        as_int(r.get('OMITE_DISP')),
+        mapear_dgr(r.get('MODO_RENTAS')),
+        as_float(r.get('RIESGO_AUT')),
+        r.get('TARIFA') or '',
+        as_float(r.get('VOLUMEN')),
+        as_int(r.get('DIA')),
+        as_float(r.get('P_EX_RENTAS')),
+        as_int(r.get('PRIORIDAD')),
+        as_float(r.get('LATITUD')),
+        as_float(r.get('LONGITUD')),
+    )
+
 def enviar_clientes(cur_ib, cur_my, con_my,
                     empresa, ejercicio, canal, imei, agente,
                     log, dry_run):
     cur_ib.execute(SQL_CLIENTES, (empresa, ejercicio, canal, agente))
-    rows = cur_ib.fetchall()
+    rows = [_row_dict(cur_ib, raw) for raw in cur_ib.fetchall()]
 
-    if not dry_run:
-        cur_my.execute('DELETE FROM cli_clientes WHERE imei=%s', (imei,))
-
-    count = 0
-    for raw in rows:
-        r = _row_dict(cur_ib, raw)
-
-        iva       = mapear_iva(r.get('MODO_IVA'))
-        cobra_dgr = mapear_dgr(r.get('MODO_RENTAS'))
-        direccion = get_direccion(r)
-        telefonos = get_telefonos(r)
-        notas     = (r.get('NOTAS') or '')[:255]
-
-        if dry_run:
+    if dry_run:
+        for r in rows:
             log.info('  [DRY] cli=%s "%s"', r['CLIENTE'], r['TIT_CLIENTE'])
-        else:
-            cur_my.execute(
-                'INSERT INTO cli_clientes '
-                '(imei,cliente,denominacion,direccion,localidad,telefonos,cuit_dni,'
-                'notas,riesgo,iva,p_desc,omite_disp,cobra_dgr,limite_credito,tarifa,'
-                'cant_versiones,categoria,p_dgr_excl,prioridad,sync,latitud,longitud)'
-                ' VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,%s,%s)',
-                (imei,
-                 as_int(r.get('CLIENTE')),
-                 r.get('TIT_CLIENTE') or '',
-                 direccion,
-                 r.get('TIT_LOCALIDAD') or '',
-                 telefonos,
-                 r.get('NIF') or '',
-                 notas,
-                 as_float(r.get('RIESGO_ACT')),
-                 iva,
-                 as_float(r.get('DESCUENTO_CIAL')),
-                 as_int(r.get('OMITE_DISP')),
-                 cobra_dgr,
-                 as_float(r.get('RIESGO_AUT')),
-                 r.get('TARIFA') or '',
-                 as_float(r.get('VOLUMEN')),
-                 as_int(r.get('DIA')),
-                 as_float(r.get('P_EX_RENTAS')),
-                 as_int(r.get('PRIORIDAD')),
-                 as_float(r.get('LATITUD')),
-                 as_float(r.get('LONGITUD')),
-                )
-            )
-        count += 1
-
-    if not dry_run:
+    else:
+        cur_my.execute('DELETE FROM cli_clientes WHERE imei=%s', (imei,))
+        if rows:
+            cur_my.executemany(_SQL_INS_CLIENTES,
+                               [_cli_tuple(imei, r) for r in rows])
         con_my.commit()
-    return count
+    return len(rows)
 
+
+_SQL_INS_ARTICULOS = (
+    'INSERT INTO art_articulos '
+    '(imei,articulo,titulo,precio,stock_ini,stock_ven,id_rubro,rubro,'
+    'b_imp,p_iva,p_iva_rec,p_descuento,p_ing_brut,sync,uds_x_bulto)'
+    ' VALUES (%s,%s,%s,%s,%s,0,0,%s,%s,%s,%s,%s,%s,0,%s)'
+)
+
+def _art_tuple(imei, r):
+    p_ing_brut = as_float(r.get('P_RENTAS')) or as_float(r.get('P_IRPF'))
+    return (
+        imei,
+        r.get('ARTICULO') or '',
+        r.get('TIT_ARTICULO') or '',
+        round(as_float(r.get('PVP')) or 0.0, 2),
+        as_float(r.get('EXISTENCIAS')),
+        get_rubro(r),
+        as_float(r.get('P_BASE_IMPO')),
+        as_float(r.get('P_IVA_PALM')),
+        as_float(r.get('P_RECARGO_PALM')),
+        as_float(r.get('DESCUENTO')),
+        p_ing_brut,
+        as_float(r.get('UDS_X_BULTO')),
+    )
 
 def enviar_articulos(cur_ib, cur_my, con_my,
                      empresa, ejercicio, canal, imei, agente,
@@ -355,47 +372,26 @@ def enviar_articulos(cur_ib, cur_my, con_my,
         fam_baja=ib_str(fam_baja),
     )
     cur_ib.execute(sql, (empresa, ejercicio, canal, agente))
-    rows = cur_ib.fetchall()
+    rows = [_row_dict(cur_ib, raw) for raw in cur_ib.fetchall()]
 
-    if not dry_run:
+    if dry_run:
+        for r in rows:
+            log.info('  [DRY] art=%s "%s" pvp=%s',
+                     r['ARTICULO'], r['TIT_ARTICULO'], r['PVP'])
+    else:
         cur_my.execute('DELETE FROM art_articulos WHERE imei=%s', (imei,))
-
-    count = 0
-    for raw in rows:
-        r = _row_dict(cur_ib, raw)
-
-        rubro = get_rubro(r)
-        # p_ing_brut: P_RENTAS tiene prioridad sobre P_IRPF (rentas sobreescribe)
-        p_ing_brut = as_float(r.get('P_RENTAS')) or as_float(r.get('P_IRPF'))
-
-        if dry_run:
-            log.info('  [DRY] art=%s "%s" pvp=%s', r['ARTICULO'], r['TIT_ARTICULO'], r['PVP'])
-        else:
-            cur_my.execute(
-                'INSERT INTO art_articulos '
-                '(imei,articulo,titulo,precio,stock_ini,stock_ven,id_rubro,rubro,'
-                'b_imp,p_iva,p_iva_rec,p_descuento,p_ing_brut,sync,uds_x_bulto)'
-                ' VALUES (%s,%s,%s,%s,%s,0,0,%s,%s,%s,%s,%s,%s,0,%s)',
-                (imei,
-                 r.get('ARTICULO') or '',
-                 r.get('TIT_ARTICULO') or '',
-                 round(as_float(r.get('PVP')) or 0.0, 2),
-                 as_float(r.get('EXISTENCIAS')),
-                 rubro,
-                 as_float(r.get('P_BASE_IMPO')),
-                 as_float(r.get('P_IVA_PALM')),
-                 as_float(r.get('P_RECARGO_PALM')),
-                 as_float(r.get('DESCUENTO')),
-                 p_ing_brut,
-                 as_float(r.get('UDS_X_BULTO')),
-                )
-            )
-        count += 1
-
-    if not dry_run:
+        if rows:
+            cur_my.executemany(_SQL_INS_ARTICULOS,
+                               [_art_tuple(imei, r) for r in rows])
         con_my.commit()
-    return count
+    return len(rows)
 
+
+_SQL_INS_PRECIOS = (
+    'INSERT INTO art_precios '
+    '(imei,tarifa,articulo,linea,uds_min,uds_max,precio,descuento,sync)'
+    ' VALUES (%s,%s,%s,1,-9999,9999,%s,0,0)'
+)
 
 def enviar_precios(cur_ib, cur_my, con_my,
                    empresa, ejercicio, canal, imei, agente,
@@ -405,77 +401,62 @@ def enviar_precios(cur_ib, cur_my, con_my,
         fam_baja=ib_str(fam_baja),
     )
     cur_ib.execute(sql, (empresa, ejercicio, canal, agente))
-    rows = cur_ib.fetchall()
+    rows = [_row_dict(cur_ib, raw) for raw in cur_ib.fetchall()]
 
-    if not dry_run:
+    if dry_run:
+        for r in rows:
+            log.info('  [DRY] tar=%s art=%s pvp=%s',
+                     r['TARIFA'], r['ARTICULO'], r['PVP'])
+    else:
         cur_my.execute('DELETE FROM art_precios WHERE imei=%s', (imei,))
-
-    count = 0
-    for raw in rows:
-        r = _row_dict(cur_ib, raw)
-
-        if dry_run:
-            log.info('  [DRY] tar=%s art=%s pvp=%s', r['TARIFA'], r['ARTICULO'], r['PVP'])
-        else:
-            cur_my.execute(
-                'INSERT INTO art_precios '
-                '(imei,tarifa,articulo,linea,uds_min,uds_max,precio,descuento,sync)'
-                ' VALUES (%s,%s,%s,1,-9999,9999,%s,0,0)',
-                (imei,
-                 r.get('TARIFA') or '',
-                 r.get('ARTICULO') or '',
-                 round(as_float(r.get('PVP')) or 0.0, 2),
-                )
-            )
-        count += 1
-
-    if not dry_run:
+        if rows:
+            cur_my.executemany(_SQL_INS_PRECIOS, [
+                (imei, r.get('TARIFA') or '', r.get('ARTICULO') or '',
+                 round(as_float(r.get('PVP')) or 0.0, 2))
+                for r in rows
+            ])
         con_my.commit()
-    return count
+    return len(rows)
 
+
+_SQL_INS_DEUDAS = (
+    'INSERT INTO cli_deudas '
+    '(imei,cliente,tipo,serie,rig,fecha,origen,saldo,ric,linea,sync)'
+    ' VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0)'
+)
+
+def _deu_tuple(imei, r):
+    return (
+        imei,
+        as_int(r.get('COD_CLI_PRO')),
+        r.get('DOC_TIPO') or '',
+        r.get('DOC_SERIE') or '',
+        as_int(r.get('DOC_NUMERO')),
+        formatear_fecha(r.get('DOC_FECHA')),
+        str(as_int(r.get('AGENTE'))),
+        as_float(r.get('LIQUIDO')),
+        as_int(r.get('REGISTRO')),
+        as_int(r.get('LINEA')),
+    )
 
 def enviar_deudas(cur_ib, cur_my, con_my,
                   empresa, ejercicio, canal, imei, agente,
                   log, dry_run):
     cur_ib.execute(SQL_DEUDAS, (empresa, ejercicio, canal, agente))
-    rows = cur_ib.fetchall()
+    rows = [_row_dict(cur_ib, raw) for raw in cur_ib.fetchall()]
 
-    if not dry_run:
-        cur_my.execute('DELETE FROM cli_deudas WHERE imei=%s', (imei,))
-
-    count = 0
-    for raw in rows:
-        r = _row_dict(cur_ib, raw)
-
-        fecha  = formatear_fecha(r.get('DOC_FECHA'))
-        origen = str(as_int(r.get('AGENTE')))   # agente como string (para rendicion)
-
-        if dry_run:
+    if dry_run:
+        for r in rows:
             log.info('  [DRY] cli=%s %s/%s/%s saldo=%s',
                      r['COD_CLI_PRO'], r['DOC_TIPO'], r['DOC_SERIE'],
                      r['DOC_NUMERO'], r['LIQUIDO'])
-        else:
-            cur_my.execute(
-                'INSERT INTO cli_deudas '
-                '(imei,cliente,tipo,serie,rig,fecha,origen,saldo,ric,linea,sync)'
-                ' VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0)',
-                (imei,
-                 as_int(r.get('COD_CLI_PRO')),
-                 r.get('DOC_TIPO') or '',
-                 r.get('DOC_SERIE') or '',
-                 as_int(r.get('DOC_NUMERO')),
-                 fecha,
-                 origen,
-                 as_float(r.get('LIQUIDO')),
-                 as_int(r.get('REGISTRO')),
-                 as_int(r.get('LINEA')),
-                )
-            )
-        count += 1
-
-    if not dry_run:
+    else:
+        cur_my.execute('DELETE FROM cli_deudas WHERE imei=%s', (imei,))
+        if rows:
+            cur_my.executemany(_SQL_INS_DEUDAS,
+                               [_deu_tuple(imei, r) for r in rows])
         con_my.commit()
-    return count
+    return len(rows)
 
 
 def obtener_ultimo_reparto(cur_ib, empresa, ejercicio, canal, agente):
@@ -507,57 +488,18 @@ def enviar_clientes_rep(cur_ib, cur_my, con_my,
 
     sql = _SQL_CLIENTES_REP_TMPL.format(in_clientes=ib_int_list(clientes))
     cur_ib.execute(sql, (empresa, ejercicio, canal))
-    rows = cur_ib.fetchall()
+    rows = [_row_dict(cur_ib, raw) for raw in cur_ib.fetchall()]
 
-    if not dry_run:
-        cur_my.execute('DELETE FROM cli_clientes WHERE imei=%s', (imei,))
-
-    count = 0
-    for raw in rows:
-        r = _row_dict(cur_ib, raw)
-        iva       = mapear_iva(r.get('MODO_IVA'))
-        cobra_dgr = mapear_dgr(r.get('MODO_RENTAS'))
-        direccion = get_direccion(r)
-        telefonos = get_telefonos(r)
-        notas     = (r.get('NOTAS') or '')[:255]
-
-        if dry_run:
+    if dry_run:
+        for r in rows:
             log.info('  [DRY] cli=%s "%s"', r['CLIENTE'], r['TIT_CLIENTE'])
-        else:
-            cur_my.execute(
-                'INSERT INTO cli_clientes '
-                '(imei,cliente,denominacion,direccion,localidad,telefonos,cuit_dni,'
-                'notas,riesgo,iva,p_desc,omite_disp,cobra_dgr,limite_credito,tarifa,'
-                'cant_versiones,categoria,p_dgr_excl,prioridad,sync,latitud,longitud)'
-                ' VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,%s,%s)',
-                (imei,
-                 as_int(r.get('CLIENTE')),
-                 r.get('TIT_CLIENTE') or '',
-                 direccion,
-                 r.get('TIT_LOCALIDAD') or '',
-                 telefonos,
-                 r.get('NIF') or '',
-                 notas,
-                 as_float(r.get('RIESGO_ACT')),
-                 iva,
-                 as_float(r.get('DESCUENTO_CIAL')),
-                 as_int(r.get('OMITE_DISP')),
-                 cobra_dgr,
-                 as_float(r.get('RIESGO_AUT')),
-                 r.get('TARIFA') or '',
-                 as_float(r.get('VOLUMEN')),
-                 as_int(r.get('DIA')),
-                 as_float(r.get('P_EX_RENTAS')),
-                 as_int(r.get('PRIORIDAD')),
-                 as_float(r.get('LATITUD')),
-                 as_float(r.get('LONGITUD')),
-                )
-            )
-        count += 1
-
-    if not dry_run:
+    else:
+        cur_my.execute('DELETE FROM cli_clientes WHERE imei=%s', (imei,))
+        if rows:
+            cur_my.executemany(_SQL_INS_CLIENTES,
+                               [_cli_tuple(imei, r) for r in rows])
         con_my.commit()
-    return count
+    return len(rows)
 
 
 def enviar_articulos_rep(cur_ib, cur_my, con_my,
@@ -580,45 +522,19 @@ def enviar_articulos_rep(cur_ib, cur_my, con_my,
         in_articulos=ib_str_list(articulos),
     )
     cur_ib.execute(sql, (empresa, ejercicio, canal))
-    rows = cur_ib.fetchall()
+    rows = [_row_dict(cur_ib, raw) for raw in cur_ib.fetchall()]
 
-    if not dry_run:
-        cur_my.execute('DELETE FROM art_articulos WHERE imei=%s', (imei,))
-
-    count = 0
-    for raw in rows:
-        r = _row_dict(cur_ib, raw)
-        rubro      = get_rubro(r)
-        p_ing_brut = as_float(r.get('P_RENTAS')) or as_float(r.get('P_IRPF'))
-
-        if dry_run:
+    if dry_run:
+        for r in rows:
             log.info('  [DRY] art=%s "%s" pvp=%s',
                      r['ARTICULO'], r['TIT_ARTICULO'], r['PVP'])
-        else:
-            cur_my.execute(
-                'INSERT INTO art_articulos '
-                '(imei,articulo,titulo,precio,stock_ini,stock_ven,id_rubro,rubro,'
-                'b_imp,p_iva,p_iva_rec,p_descuento,p_ing_brut,sync,uds_x_bulto)'
-                ' VALUES (%s,%s,%s,%s,%s,0,0,%s,%s,%s,%s,%s,%s,0,%s)',
-                (imei,
-                 r.get('ARTICULO') or '',
-                 r.get('TIT_ARTICULO') or '',
-                 round(as_float(r.get('PVP')) or 0.0, 2),
-                 as_float(r.get('EXISTENCIAS')),
-                 rubro,
-                 as_float(r.get('P_BASE_IMPO')),
-                 as_float(r.get('P_IVA_PALM')),
-                 as_float(r.get('P_RECARGO_PALM')),
-                 as_float(r.get('DESCUENTO')),
-                 p_ing_brut,
-                 as_float(r.get('UDS_X_BULTO')),
-                )
-            )
-        count += 1
-
-    if not dry_run:
+    else:
+        cur_my.execute('DELETE FROM art_articulos WHERE imei=%s', (imei,))
+        if rows:
+            cur_my.executemany(_SQL_INS_ARTICULOS,
+                               [_art_tuple(imei, r) for r in rows])
         con_my.commit()
-    return count
+    return len(rows)
 
 
 def enviar_deudas_rep(cur_ib, cur_my, con_my,
@@ -630,44 +546,44 @@ def enviar_deudas_rep(cur_ib, cur_my, con_my,
     (hardcoded en UDMSyncDeudas.pas linea 163).
     """
     cur_ib.execute(SQL_DEUDAS_REP, (empresa, ejercicio, canal))
-    rows = cur_ib.fetchall()
+    rows = [_row_dict(cur_ib, raw) for raw in cur_ib.fetchall()]
 
-    if not dry_run:
-        cur_my.execute('DELETE FROM cli_deudas WHERE imei=%s', (imei,))
-
-    count = 0
-    for raw in rows:
-        r = _row_dict(cur_ib, raw)
-        fecha  = formatear_fecha(r.get('DOC_FECHA'))
-        origen = str(as_int(r.get('AGENTE')))
-
-        if dry_run:
+    if dry_run:
+        for r in rows:
             log.info('  [DRY] deu cli=%s %s/%s/%s saldo=%s',
                      r['COD_CLI_PRO'], r['DOC_TIPO'], r['DOC_SERIE'],
                      r['DOC_NUMERO'], r['LIQUIDO'])
-        else:
-            cur_my.execute(
-                'INSERT INTO cli_deudas '
-                '(imei,cliente,tipo,serie,rig,fecha,origen,saldo,ric,linea,sync)'
-                ' VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0)',
-                (imei,
-                 as_int(r.get('COD_CLI_PRO')),
-                 r.get('DOC_TIPO') or '',
-                 r.get('DOC_SERIE') or '',
-                 as_int(r.get('DOC_NUMERO')),
-                 fecha,
-                 origen,
-                 as_float(r.get('LIQUIDO')),
-                 as_int(r.get('REGISTRO')),
-                 as_int(r.get('LINEA')),
-                )
-            )
-        count += 1
-
-    if not dry_run:
+    else:
+        cur_my.execute('DELETE FROM cli_deudas WHERE imei=%s', (imei,))
+        if rows:
+            cur_my.executemany(_SQL_INS_DEUDAS,
+                               [_deu_tuple(imei, r) for r in rows])
         con_my.commit()
-    return count
+    return len(rows)
 
+
+_SQL_INS_CAB = (
+    'INSERT INTO doc_pedidos_cab'
+    ' (imei,agente,serie,tipo,rig,anulada,fecha,referencia,cliente,'
+    '  bruto_tab,bruto_var,i_desc_tab,i_desc_var,i_iva_tab,i_iva_var,'
+    '  liquido,forma_pago,i_ing_brut_tab,i_ing_brut_var,i_b_imp_tab,'
+    '  i_b_imp_var,i_rec_iva_tab,i_rec_iva_var,tipo_iva,direccion,'
+    '  empresa,sync,_id)'
+    ' VALUES (%s,%s,%s,"FAC",%s,0,%s,%s,%s,'
+    '         0,%s,0,0,0,%s,'
+    '         %s,%s,0,%s,0,'
+    '         %s,0,%s,"",0,'
+    '         %s,0,%s)'
+)
+_SQL_INS_DET = (
+    'INSERT INTO doc_pedidos_det'
+    ' (imei,serie,tipo,rig,articulo,titulo,indrubro,unidades,precio,'
+    '  subtotal1,p_descuento,subtotal,i_b_imp,i_iva,i_iva_rec,i_desc,'
+    '  i_ing_brut,sync,_id,id_cab,linea)'
+    ' VALUES (%s,%s,"FAC",%s,%s,%s,-1,%s,%s,'
+    '         %s,%s,%s,%s,%s,%s,%s,'
+    '         0,0,%s,%s,%s)'
+)
 
 def enviar_facturas(cur_ib, cur_my, con_my,
                     empresa, ejercicio, canal, imei, reparto,
@@ -679,94 +595,77 @@ def enviar_facturas(cur_ib, cur_my, con_my,
     precio en det = PRECIO + C_IVA/UNIDADES (GetPrecio de proyecto Castro).
     """
     cur_ib.execute(SQL_REP_CABS, (empresa, ejercicio, canal, reparto))
-    cab_rows = cur_ib.fetchall()
-    cabs = [_row_dict(cur_ib, raw) for raw in cab_rows]
+    cabs = [_row_dict(cur_ib, raw) for raw in cur_ib.fetchall()]
 
-    if not dry_run:
-        cur_my.execute('DELETE FROM doc_pedidos_cab WHERE imei=%s', (imei,))
-        cur_my.execute('DELETE FROM doc_pedidos_det WHERE imei=%s', (imei,))
-
-    n_cab = 0
-    n_det = 0
-
-    for r in cabs:
-        id_s = as_int(r.get('ID_S'))
-
-        # cant_detalles por cab (convension Delphi: se guarda en campo empresa)
+    # Obtener cant_detalles por id_s en una sola query (en lugar de N queries)
+    id_s_list = [as_int(r.get('ID_S')) for r in cabs]
+    cant_dets_map = {}
+    if id_s_list:
+        in_clause = ', '.join(str(v) for v in id_s_list)
         cur_ib.execute(
-            'SELECT COUNT(*) FROM ges_detalles_s WHERE id_s=?', (id_s,))
-        row = cur_ib.fetchone()
-        cant_dets = as_int(row[0]) if row else 0
-
-        fecha = formatear_fecha_hora(r.get('FECHA_HORA'))
-
-        if dry_run:
-            log.info('  [DRY] cab rep=%d rig=%s cli=%s liq=%.2f dets=%d',
-                     reparto, r.get('RIG'), r.get('CLIENTE'),
-                     as_float(r.get('LIQUIDO')), cant_dets)
-        else:
-            cur_my.execute(
-                'INSERT INTO doc_pedidos_cab'
-                ' (imei,agente,serie,tipo,rig,anulada,fecha,referencia,cliente,'
-                '  bruto_tab,bruto_var,i_desc_tab,i_desc_var,i_iva_tab,i_iva_var,'
-                '  liquido,forma_pago,i_ing_brut_tab,i_ing_brut_var,i_b_imp_tab,'
-                '  i_b_imp_var,i_rec_iva_tab,i_rec_iva_var,tipo_iva,direccion,'
-                '  empresa,sync,_id)'
-                ' VALUES (%s,%s,%s,"FAC",%s,0,%s,%s,%s,'
-                '         0,%s,0,0,0,%s,'
-                '         %s,%s,0,%s,0,'
-                '         %s,0,%s,"",0,'
-                '         %s,0,%s)',
-                (imei, as_int(r.get('VENDEDOR')), r.get('SERIE') or '',
-                 as_int(r.get('RIG')), fecha,
-                 r.get('REFERENCIA') or '', as_int(r.get('CLIENTE')),
-                 as_float(r.get('BRUTO_VAR')), as_float(r.get('IVA_VAR')),
-                 as_float(r.get('LIQUIDO')), r.get('FORMA_PAGO') or '',
-                 as_float(r.get('ING_BRUTOS_VAR')),
-                 as_float(r.get('BASEIMPONIBLE_VAR')),
-                 as_float(r.get('I_REC_VAR')),
-                 cant_dets, id_s,
-                )
-            )
-        n_cab += 1
+            f'SELECT id_s, COUNT(*) FROM ges_detalles_s'
+            f' WHERE id_s IN ({in_clause}) GROUP BY id_s')
+        cant_dets_map = {as_int(row[0]): as_int(row[1])
+                         for row in cur_ib.fetchall()}
 
     cur_ib.execute(SQL_REP_DETS, (empresa, ejercicio, canal, reparto))
-    det_rows = cur_ib.fetchall()
-    dets = [_row_dict(cur_ib, raw) for raw in det_rows]
+    dets = [_row_dict(cur_ib, raw) for raw in cur_ib.fetchall()]
 
-    for d in dets:
-        unidades = as_float(d.get('UNIDADES'))
-        c_iva    = as_float(d.get('C_IVA'))
-        precio   = round(as_float(d.get('PRECIO')) + (c_iva / unidades if unidades else 0.0), 2)
-
-        if dry_run:
+    if dry_run:
+        for r in cabs:
+            id_s = as_int(r.get('ID_S'))
+            log.info('  [DRY] cab rep=%d rig=%s cli=%s liq=%.2f dets=%d',
+                     reparto, r.get('RIG'), r.get('CLIENTE'),
+                     as_float(r.get('LIQUIDO')), cant_dets_map.get(id_s, 0))
+        for d in dets:
+            unidades = as_float(d.get('UNIDADES'))
+            c_iva    = as_float(d.get('C_IVA'))
+            precio   = round(as_float(d.get('PRECIO')) + (c_iva / unidades if unidades else 0.0), 2)
             log.info('  [DRY] det art=%s "%s" u=%.0f p=%.4f',
                      d.get('ARTICULO'), d.get('TITULO'), unidades, precio)
-        else:
-            cur_my.execute(
-                'INSERT INTO doc_pedidos_det'
-                ' (imei,serie,tipo,rig,articulo,titulo,indrubro,unidades,precio,'
-                '  subtotal1,p_descuento,subtotal,i_b_imp,i_iva,i_iva_rec,i_desc,'
-                '  i_ing_brut,sync,_id,id_cab,linea)'
-                ' VALUES (%s,%s,"FAC",%s,%s,%s,-1,%s,%s,'
-                '         %s,%s,%s,%s,%s,%s,%s,'
-                '         0,0,%s,%s,%s)',
-                (imei, d.get('SERIE') or '',
-                 as_int(d.get('RIG')), d.get('ARTICULO') or '',
-                 d.get('TITULO') or '', unidades, precio,
-                 as_float(d.get('BRUTO')), as_float(d.get('DESCUENTO')),
-                 as_float(d.get('LIQUIDO')), as_float(d.get('B_IMPONIBLE')),
-                 c_iva, as_float(d.get('C_RECARGO')),
-                 as_float(d.get('I_DESCUENTO')),
-                 as_int(d.get('ID_DETALLES_S')), as_int(d.get('ID_S')),
-                 as_int(d.get('LINEA')),
-                )
-            )
-        n_det += 1
+        return len(cabs), len(dets)
 
-    if not dry_run:
-        con_my.commit()
-    return n_cab, n_det
+    cur_my.execute('DELETE FROM doc_pedidos_cab WHERE imei=%s', (imei,))
+    cur_my.execute('DELETE FROM doc_pedidos_det WHERE imei=%s', (imei,))
+
+    if cabs:
+        cab_params = []
+        for r in cabs:
+            id_s = as_int(r.get('ID_S'))
+            cab_params.append((
+                imei, as_int(r.get('VENDEDOR')), r.get('SERIE') or '',
+                as_int(r.get('RIG')), formatear_fecha_hora(r.get('FECHA_HORA')),
+                r.get('REFERENCIA') or '', as_int(r.get('CLIENTE')),
+                as_float(r.get('BRUTO_VAR')), as_float(r.get('IVA_VAR')),
+                as_float(r.get('LIQUIDO')), r.get('FORMA_PAGO') or '',
+                as_float(r.get('ING_BRUTOS_VAR')),
+                as_float(r.get('BASEIMPONIBLE_VAR')),
+                as_float(r.get('I_REC_VAR')),
+                cant_dets_map.get(id_s, 0), id_s,
+            ))
+        cur_my.executemany(_SQL_INS_CAB, cab_params)
+
+    if dets:
+        det_params = []
+        for d in dets:
+            unidades = as_float(d.get('UNIDADES'))
+            c_iva    = as_float(d.get('C_IVA'))
+            precio   = round(as_float(d.get('PRECIO')) + (c_iva / unidades if unidades else 0.0), 2)
+            det_params.append((
+                imei, d.get('SERIE') or '',
+                as_int(d.get('RIG')), d.get('ARTICULO') or '',
+                d.get('TITULO') or '', unidades, precio,
+                as_float(d.get('BRUTO')), as_float(d.get('DESCUENTO')),
+                as_float(d.get('LIQUIDO')), as_float(d.get('B_IMPONIBLE')),
+                c_iva, as_float(d.get('C_RECARGO')),
+                as_float(d.get('I_DESCUENTO')),
+                as_int(d.get('ID_DETALLES_S')), as_int(d.get('ID_S')),
+                as_int(d.get('LINEA')),
+            ))
+        cur_my.executemany(_SQL_INS_DET, det_params)
+
+    con_my.commit()
+    return len(cabs), len(dets)
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
