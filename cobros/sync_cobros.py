@@ -260,11 +260,14 @@ def imputar_cobros(con_ib, log, empresa, ejercicio, canal, entrada):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main(config_path=DEFAULT_CONFIG, dry_run=False):
+    from logging.handlers import RotatingFileHandler
+    log_path = os.path.join(_here, 'sync_cobros.log')
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s %(levelname)s %(message)s',
         handlers=[
-            logging.FileHandler('sync_cobros.log', encoding='utf-8'),
+            RotatingFileHandler(log_path, maxBytes=2*1024*1024,
+                                backupCount=10, encoding='utf-8'),
             logging.StreamHandler(sys.stdout),
         ],
     )

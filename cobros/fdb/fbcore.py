@@ -1334,35 +1334,44 @@ class Connection(object):
         if precision is not None:
             return precision
         # First, try table
-        self.__ic.execute("SELECT FIELD_SPEC.RDB$FIELD_PRECISION"
-                          " FROM RDB$FIELDS FIELD_SPEC,"
-                          " RDB$RELATION_FIELDS REL_FIELDS"
-                          " WHERE"
-                          " FIELD_SPEC.RDB$FIELD_NAME ="
-                          " REL_FIELDS.RDB$FIELD_SOURCE"
-                          " AND REL_FIELDS.RDB$RELATION_NAME = ?"
-                          " AND REL_FIELDS.RDB$FIELD_NAME = ?",
-                          (p3fix(sqlvar.relname, self._python_charset),
-                           p3fix(sqlvar.sqlname, self._python_charset)))
-        result = self.__ic.fetchone()
-        self.__ic.close()
+        # IB 5.6 patch: RDB$FIELD_PRECISION does not exist in IB 5.6 catalog
+        try:
+            self.__ic.execute("SELECT FIELD_SPEC.RDB$FIELD_PRECISION"
+                              " FROM RDB$FIELDS FIELD_SPEC,"
+                              " RDB$RELATION_FIELDS REL_FIELDS"
+                              " WHERE"
+                              " FIELD_SPEC.RDB$FIELD_NAME ="
+                              " REL_FIELDS.RDB$FIELD_SOURCE"
+                              " AND REL_FIELDS.RDB$RELATION_NAME = ?"
+                              " AND REL_FIELDS.RDB$FIELD_NAME = ?",
+                              (p3fix(sqlvar.relname, self._python_charset),
+                               p3fix(sqlvar.sqlname, self._python_charset)))
+            result = self.__ic.fetchone()
+            self.__ic.close()
+        except DatabaseError:
+            self.__precision_cache[(sqlvar.relname, sqlvar.sqlname)] = 0
+            return 0
         if result:
             self.__precision_cache[(sqlvar.relname, sqlvar.sqlname)] = result[0]
             return result[0]
         # Next, try stored procedure output parameter
-        self.__ic.execute("SELECT FIELD_SPEC.RDB$FIELD_PRECISION"
-                          " FROM RDB$FIELDS FIELD_SPEC,"
-                          " RDB$PROCEDURE_PARAMETERS REL_FIELDS"
-                          " WHERE"
-                          " FIELD_SPEC.RDB$FIELD_NAME ="
-                          " REL_FIELDS.RDB$FIELD_SOURCE"
-                          " AND RDB$PROCEDURE_NAME = ?"
-                          " AND RDB$PARAMETER_NAME = ?"
-                          " AND RDB$PARAMETER_TYPE = 1",
-                          (p3fix(sqlvar.relname, self._python_charset),
-                           p3fix(sqlvar.sqlname, self._python_charset)))
-        result = self.__ic.fetchone()
-        self.__ic.close()
+        try:
+            self.__ic.execute("SELECT FIELD_SPEC.RDB$FIELD_PRECISION"
+                              " FROM RDB$FIELDS FIELD_SPEC,"
+                              " RDB$PROCEDURE_PARAMETERS REL_FIELDS"
+                              " WHERE"
+                              " FIELD_SPEC.RDB$FIELD_NAME ="
+                              " REL_FIELDS.RDB$FIELD_SOURCE"
+                              " AND RDB$PROCEDURE_NAME = ?"
+                              " AND RDB$PARAMETER_NAME = ?"
+                              " AND RDB$PARAMETER_TYPE = 1",
+                              (p3fix(sqlvar.relname, self._python_charset),
+                               p3fix(sqlvar.sqlname, self._python_charset)))
+            result = self.__ic.fetchone()
+            self.__ic.close()
+        except DatabaseError:
+            self.__precision_cache[(sqlvar.relname, sqlvar.sqlname)] = 0
+            return 0
         if result:
             self.__precision_cache[(sqlvar.relname, sqlvar.sqlname)] = result[0]
             return result[0]

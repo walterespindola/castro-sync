@@ -278,8 +278,15 @@ def leer_familias_excluidas(cur_ib):
 
 # ─── Envio de cada entidad ────────────────────────────────────────────────────
 
+def _clean(v):
+    # fdb sustituye bytes invalidos de IB con U+FFFD; los descartamos
+    # para que el conector MySQL (latin-1) no falle al codificar
+    if isinstance(v, str):
+        return v.encode('latin-1', errors='ignore').decode('latin-1')
+    return v
+
 def _row_dict(cur, row):
-    return {d[0]: v for d, v in zip(cur.description, row)}
+    return {d[0]: _clean(v) for d, v in zip(cur.description, row)}
 
 
 def enviar_clientes(cur_ib, cur_my, con_my,
@@ -765,11 +772,14 @@ def enviar_facturas(cur_ib, cur_my, con_my,
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main(config_path=DEFAULT_CONFIG, dry_run=False):
+    from logging.handlers import RotatingFileHandler
+    log_path = os.path.join(_here, 'sync_envio.log')
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s %(levelname)s %(message)s',
         handlers=[
-            logging.FileHandler('sync_envio.log', encoding='utf-8'),
+            RotatingFileHandler(log_path, maxBytes=2*1024*1024,
+                                backupCount=10, encoding='utf-8'),
             logging.StreamHandler(sys.stdout),
         ],
     )
