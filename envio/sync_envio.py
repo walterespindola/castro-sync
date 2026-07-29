@@ -686,6 +686,9 @@ def main(config_path=DEFAULT_CONFIG, dry_run=False):
     if dry_run:
         log.info('*** MODO DRY-RUN: solo lectura, no se escribe nada ***')
 
+    if not os.path.isabs(config_path):
+        config_path = os.path.join(_here, config_path)
+
     cfg = configparser.ConfigParser()
     cfg.read(config_path, encoding='utf-8')
 
