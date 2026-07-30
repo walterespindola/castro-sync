@@ -77,7 +77,8 @@ SQL_CLIENTES = """\
 _SQL_ARTICULOS_TMPL = """\
     SELECT ARTICULO, TIT_ARTICULO, TIT_FAMILIA, PVP, EXISTENCIAS,
            P_BASE_IMPO, P_IVA_PALM, P_RECARGO_PALM, DESCUENTO,
-           P_IRPF, P_RENTAS, UDS_X_BULTO, MOV_TOMA_STK
+           P_IRPF, P_RENTAS, UDS_X_BULTO, MOV_TOMA_STK,
+           IVA_INCLUIDO, P_IVA, IMPUESTO_INTERNO
     FROM VER_MOV_ARTICULOS
     WHERE empresa=? AND ejercicio=? AND canal=? AND agente=?
       AND familia NOT IN ({fam_sys},{fam_baja})
@@ -87,7 +88,7 @@ _SQL_ARTICULOS_TMPL = """\
 
 # VER_MOV_PRECIOS ya filtra sincronizar=1 y disponibilidad in (1,2) en la vista
 _SQL_PRECIOS_TMPL = """\
-    SELECT TARIFA, ARTICULO, PVP
+    SELECT TARIFA, ARTICULO, PVP, IVA_INCLUIDO, P_IVA, IMPUESTO_INTERNO
     FROM VER_MOV_PRECIOS
     WHERE empresa=? AND ejercicio=? AND canal=? AND agente=?
       AND familia NOT IN ({fam_sys},{fam_baja})
@@ -135,7 +136,8 @@ _SQL_CLIENTES_REP_TMPL = """\
 _SQL_ARTICULOS_REP_TMPL = """\
     SELECT ARTICULO, TIT_ARTICULO, TIT_FAMILIA, PVP, EXISTENCIAS,
            P_BASE_IMPO, P_IVA_PALM, P_RECARGO_PALM, DESCUENTO,
-           P_IRPF, P_RENTAS, UDS_X_BULTO, MOV_TOMA_STK
+           P_IRPF, P_RENTAS, UDS_X_BULTO, MOV_TOMA_STK,
+           IVA_INCLUIDO, P_IVA, IMPUESTO_INTERNO
     FROM VER_MOV_REP_ART
     WHERE empresa=? AND ejercicio=? AND canal=?
       AND familia NOT IN ({fam_sys},{fam_baja})
@@ -238,6 +240,17 @@ def as_int(v, default=0):
         return int(v)
     except (TypeError, ValueError):
         return default
+
+def get_precio_ib(r):
+    """Replica GetPrecioIB() de UDMSyncPadre.pas.
+    Si IVA_INCLUIDO=0 el PVP viene sin IVA; hay que sumarselo mas el impuesto interno.
+    Si IVA_INCLUIDO=1 el PVP ya lo incluye, se usa directamente."""
+    pvp = as_float(r.get('PVP'))
+    if (r.get('IVA_INCLUIDO') or 0) == 0:
+        iva = pvp * (as_float(r.get('P_IVA')) / 100)
+        imp_interno = as_float(r.get('IMPUESTO_INTERNO'))
+        return round(pvp + iva + imp_interno, 2)
+    return round(pvp, 2)
 
 
 # ─── Conexiones ───────────────────────────────────────────────────────────────
@@ -353,7 +366,7 @@ def _art_tuple(imei, r):
         imei,
         r.get('ARTICULO') or '',
         r.get('TIT_ARTICULO') or '',
-        round(as_float(r.get('PVP')) or 0.0, 2),
+        get_precio_ib(r),
         as_float(r.get('EXISTENCIAS')),
         get_rubro(r),
         as_float(r.get('P_BASE_IMPO')),
@@ -412,7 +425,7 @@ def enviar_precios(cur_ib, cur_my, con_my,
         if rows:
             cur_my.executemany(_SQL_INS_PRECIOS, [
                 (imei, r.get('TARIFA') or '', r.get('ARTICULO') or '',
-                 round(as_float(r.get('PVP')) or 0.0, 2))
+                 get_precio_ib(r))
                 for r in rows
             ])
         con_my.commit()
