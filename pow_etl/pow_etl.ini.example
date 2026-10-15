@@ -1,0 +1,21 @@
+; =============================================================================
+; pow_etl.ini — ETL adicional IB -> MySQL para el tablero PowerBI (FBD/Fratelli)
+; Copiar a pow_etl.ini (mismo formato que sync_envio.ini) y completar.
+; NO commitear pow_etl.ini con las credenciales reales.
+; =============================================================================
+
+[gestion]
+empresa = 2
+
+[mysql]
+host     = intersoftsistemas.com.ar
+user     = USUARIO_MYSQL
+password = PASSWORD_MYSQL
+database = castro_test
+
+[interbase]
+host     = localhost
+database = C:\Ruta\A\LA_BASE.MDF
+user     = SYSDBA
+password = masterkey
+gds32    = C:\Ruta\A\gds32.dll

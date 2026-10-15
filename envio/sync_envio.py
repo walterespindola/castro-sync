@@ -77,7 +77,7 @@ SQL_CLIENTES = """\
 _SQL_ARTICULOS_TMPL = """\
     SELECT ARTICULO, TIT_ARTICULO, TIT_FAMILIA, PVP, EXISTENCIAS,
            P_BASE_IMPO, P_IVA_PALM, P_RECARGO_PALM, DESCUENTO,
-           P_IRPF, P_RENTAS, UDS_X_BULTO, MOV_TOMA_STK,
+           P_RENTAS, UDS_X_BULTO, MOV_TOMA_STK,
            IVA_INCLUIDO, P_IVA, IMPUESTO_INTERNO
     FROM VER_MOV_ARTICULOS
     WHERE empresa=? AND ejercicio=? AND canal=? AND agente=?
@@ -136,7 +136,7 @@ _SQL_CLIENTES_REP_TMPL = """\
 _SQL_ARTICULOS_REP_TMPL = """\
     SELECT ARTICULO, TIT_ARTICULO, TIT_FAMILIA, PVP, EXISTENCIAS,
            P_BASE_IMPO, P_IVA_PALM, P_RECARGO_PALM, DESCUENTO,
-           P_IRPF, P_RENTAS, UDS_X_BULTO, MOV_TOMA_STK,
+           P_RENTAS, UDS_X_BULTO, MOV_TOMA_STK,
            IVA_INCLUIDO, P_IVA, IMPUESTO_INTERNO
     FROM VER_MOV_REP_ART
     WHERE empresa=? AND ejercicio=? AND canal=?
@@ -255,6 +255,32 @@ def get_precio_ib(r):
 
 # ─── Conexiones ───────────────────────────────────────────────────────────────
 
+def descodifica_clave(clave):
+    """Replica DescodificaClave (UEntorno.pas), el mismo esquema que usa
+    G2K1.INI para ClaveBD -- ofuscacion reversible, no cifrado fuerte,
+    pero consistente con el resto del sistema. El valor cifrado de
+    ClaveBD en G2K1.INI sirve tal cual aca (misma password, mismo
+    algoritmo)."""
+    posicion = clave.index(',')
+    clave1 = int(clave[:posicion])
+    clave2 = int(clave[posicion + 1:])
+    bytes_out = []
+    for _ in range(4):
+        bytes_out.append(clave1 % 256)
+        clave1 //= 256
+    for _ in range(4):
+        bytes_out.append(clave2 % 256)
+        clave2 //= 256
+    return ''.join(chr(b) for b in bytes_out).rstrip('\x00')
+
+
+def _password_ib(cfg):
+    enc = cfg.get('interbase', 'password_enc', fallback=None)
+    if enc:
+        return descodifica_clave(enc)
+    return cfg.get('interbase', 'password')
+
+
 def conectar_ib(cfg):
     gds32 = cfg.get('interbase', 'gds32',
                     fallback=r'C:\Desarrollo\Castro\Compilacion\gds32.dll')
@@ -262,7 +288,7 @@ def conectar_ib(cfg):
         host            = cfg.get('interbase', 'host'),
         database        = cfg.get('interbase', 'database'),
         user            = cfg.get('interbase', 'user'),
-        password        = cfg.get('interbase', 'password'),
+        password        = _password_ib(cfg),
         sql_dialect     = 1,
         fb_library_name = gds32,
     )
@@ -361,7 +387,7 @@ _SQL_INS_ARTICULOS = (
 )
 
 def _art_tuple(imei, r):
-    p_ing_brut = as_float(r.get('P_RENTAS')) or as_float(r.get('P_IRPF'))
+    p_ing_brut = as_float(r.get('P_RENTAS'))
     return (
         imei,
         r.get('ARTICULO') or '',
@@ -605,7 +631,10 @@ def enviar_facturas(cur_ib, cur_my, con_my,
 
     Recibe el rig del reparto (obtenido por obtener_ultimo_reparto).
     doc_pedidos_cab.empresa almacena cant_detalles por cab (convencion Delphi).
-    precio en det = PRECIO + C_IVA/UNIDADES (GetPrecio de proyecto Castro).
+    precio en det = LIQUIDO / UNIDADES: precio final unitario con IVA, impuesto
+    interno, recargo y percepcion incluidos y descuento ya aplicado (el movil
+    trabaja con IVA incluido y no tiene campo para impuestos internos).
+    subtotal1 = subtotal = LIQUIDO; p_descuento = 0.
     """
     cur_ib.execute(SQL_REP_CABS, (empresa, ejercicio, canal, reparto))
     cabs = [_row_dict(cur_ib, raw) for raw in cur_ib.fetchall()]
@@ -632,10 +661,10 @@ def enviar_facturas(cur_ib, cur_my, con_my,
                      as_float(r.get('LIQUIDO')), cant_dets_map.get(id_s, 0))
         for d in dets:
             unidades = as_float(d.get('UNIDADES'))
-            c_iva    = as_float(d.get('C_IVA'))
-            precio   = round(as_float(d.get('PRECIO')) + (c_iva / unidades if unidades else 0.0), 2)
-            log.info('  [DRY] det art=%s "%s" u=%.0f p=%.4f',
-                     d.get('ARTICULO'), d.get('TITULO'), unidades, precio)
+            liquido  = as_float(d.get('LIQUIDO'))
+            precio   = round(liquido / unidades, 4) if unidades else round(liquido, 4)
+            log.info('  [DRY] det art=%s "%s" u=%.0f p=%.4f sub=%.2f',
+                     d.get('ARTICULO'), d.get('TITULO'), unidades, precio, liquido)
         return len(cabs), len(dets)
 
     cur_my.execute('DELETE FROM doc_pedidos_cab WHERE imei=%s', (imei,))
@@ -662,15 +691,19 @@ def enviar_facturas(cur_ib, cur_my, con_my,
         det_params = []
         for d in dets:
             unidades = as_float(d.get('UNIDADES'))
-            c_iva    = as_float(d.get('C_IVA'))
-            precio   = round(as_float(d.get('PRECIO')) + (c_iva / unidades if unidades else 0.0), 2)
+            liquido  = as_float(d.get('LIQUIDO'))
+            # precio final unitario: IVA + imp. interno + recargo + percepcion
+            # incluidos, ya con descuento (movil = IVA incluido, sin campo de imp. internos)
+            precio   = round(liquido / unidades, 4) if unidades else round(liquido, 4)
             det_params.append((
                 imei, d.get('SERIE') or '',
                 as_int(d.get('RIG')), d.get('ARTICULO') or '',
                 d.get('TITULO') or '', unidades, precio,
-                as_float(d.get('BRUTO')), as_float(d.get('DESCUENTO')),
-                as_float(d.get('LIQUIDO')), as_float(d.get('B_IMPONIBLE')),
-                c_iva, as_float(d.get('C_RECARGO')),
+                liquido,                       # subtotal1 = total del renglon
+                0.0,                           # p_descuento: ya incluido en precio
+                liquido,                       # subtotal  = total del renglon (= gestion)
+                as_float(d.get('B_IMPONIBLE')),
+                as_float(d.get('C_IVA')), as_float(d.get('C_RECARGO')),
                 as_float(d.get('I_DESCUENTO')),
                 as_int(d.get('ID_DETALLES_S')), as_int(d.get('ID_S')),
                 as_int(d.get('LINEA')),

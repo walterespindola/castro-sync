@@ -163,11 +163,31 @@ def obtener_entrada(con_ib, empresa):
     return entrada
 
 
+def descodifica_clave(clave):
+    """Replica DescodificaClave (UEntorno.pas), el mismo esquema que usa
+    G2K1.INI para ClaveBD -- ofuscacion reversible, no cifrado fuerte,
+    pero consistente con el resto del sistema. El valor cifrado de
+    ClaveBD en G2K1.INI sirve tal cual aca (misma password, mismo
+    algoritmo)."""
+    posicion = clave.index(',')
+    clave1 = int(clave[:posicion])
+    clave2 = int(clave[posicion + 1:])
+    bytes_out = []
+    for _ in range(4):
+        bytes_out.append(clave1 % 256)
+        clave1 //= 256
+    for _ in range(4):
+        bytes_out.append(clave2 % 256)
+        clave2 //= 256
+    return ''.join(chr(b) for b in bytes_out).rstrip('\x00')
+
+
 def conectar_ib(cfg):
     host     = cfg.get('interbase', 'host')
     database = cfg.get('interbase', 'database')
     user     = cfg.get('interbase', 'user')
-    password = cfg.get('interbase', 'password')
+    password_enc = cfg.get('interbase', 'password_enc', fallback=None)
+    password = descodifica_clave(password_enc) if password_enc else cfg.get('interbase', 'password')
     gds32    = cfg.get('interbase', 'gds32',
                        fallback=r'C:\Desarrollo\Castro\Compilacion\gds32.dll')
     con = fdb.connect(
