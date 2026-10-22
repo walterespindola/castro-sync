@@ -88,7 +88,7 @@ SQL_LEER_LEGADO_POR_GRUPO = (
     "SELECT script FROM TMP_POW_SCRIPTS WHERE grupo=?"
 )
 SQL_EJERCICIO_ACTIVO = (
-    "SELECT EJERCICIO FROM GEN_EJERCICIOS "
+    "SELECT MAX(EJERCICIO) FROM GEN_EJERCICIOS "
     "WHERE EMPRESA=? AND ACTIVO=1"
 )
 _RE_TABLA_INTO = re.compile(r'\sinto\s+([a-zA-Z_][a-zA-Z0-9_]*)', re.IGNORECASE)
@@ -239,7 +239,7 @@ def dame_ejercicio_activo(con_ib, empresa):
     cur = con_ib.cursor()
     cur.execute(SQL_EJERCICIO_ACTIVO, (empresa,))
     row = cur.fetchone()
-    if not row:
+    if not row or row[0] is None:
         raise RuntimeError(
             'No se encontro ejercicio ACTIVO en GEN_EJERCICIOS para empresa %s' % empresa)
     return row[0]
@@ -264,7 +264,11 @@ def correr_legado(cfg, log, dry_run, dias):
         log.info('Ejercicio activo: %s', ejercicio)
 
         cur_ib = con_ib.cursor()
-        params = (empresa, ejercicio, desde, hasta, 1, 1, 1, 1)
+        # En dialecto 1 el DATE de IB es timestamp y las facturas llevan hora:
+        # el SP filtra "fecha between desde and hasta", asi que hasta debe ser
+        # el fin del dia o se pierden las facturas de ese dia.
+        hasta_ib = datetime(hasta.year, hasta.month, hasta.day, 23, 59, 59)
+        params = (empresa, ejercicio, desde, hasta_ib, 1, 1, 1, 1)
         log.info('Generando script en IB: execute procedure POW_GENERA_SCRIPT%s', params)
         cur_ib.execute(
             'execute procedure POW_GENERA_SCRIPT(?,?,?,?,?,?,?,?)', params)
