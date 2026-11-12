@@ -103,3 +103,22 @@ vuelve lento, cambiar `run_pow_etl.bat` para pasar un `--desde` más acotado
    terminador de cada grupo en vez de `replace into`).
 2. Tabla nueva en MySQL (`ddl_pow_XXX.sql`).
 3. Agregar la entrada en el diccionario `PIEZAS` de `pow_etl.py`.
+
+## Reemplazar facturas de un rango (`--reemplazar-facturas`, 12-nov-2026)
+
+La pieza `legado` carga `pow_fac_cab`/`pow_fac_det` con `insert ignore`: agrega lo
+que falta pero **nunca corrige** lo ya cargado (factura modificada de fecha o agente,
+anulada, duplicada). Para refrescar un rango:
+
+    py -3.12-32 pow_etl.py legado --reemplazar-facturas --legado-desde 2026-10-01 --legado-hasta 2026-10-31 --dry-run
+    py -3.12-32 pow_etl.py legado --reemplazar-facturas --legado-desde 2026-10-01 --legado-hasta 2026-10-31 -c pow_etl.prod.ini
+
+- Borra de MySQL las facturas con `pow_fac_cab.fecha` dentro del rango (y sus detalles)
+  y reinserta las que hoy devuelve InterBase, **en una sola transaccion** (si algo falla,
+  rollback y el rango queda como estaba).
+- Requiere `--legado-desde` explicito; `--legado-hasta` es hoy por defecto. No se puede
+  combinar con `all`. Corre tambien clientes/rutas/articulos como siempre (esos usan `replace`).
+- Salvaguarda: si IB no devuelve ninguna cabecera para el rango, aborta sin borrar nada.
+- `--dry-run` informa cuantas cabeceras/detalles se borrarian, sin tocar nada.
+- Una factura que cambio de fecha: usar un rango que cubra la fecha vieja **y** la nueva,
+  si no la reinsercion queda en el mes equivocado hasta que se reprocese el otro.

@@ -71,6 +71,14 @@ PIEZAS = {
 }
 
 PIEZA_LEGADO = 'legado'
+
+# --reemplazar-facturas: borrar y reinsertar las facturas de un rango (pow_fac_cab/det)
+SQL_CONTAR_CAB = "SELECT COUNT(*) FROM pow_fac_cab WHERE fecha BETWEEN %s AND %s"
+SQL_CONTAR_DET = ("SELECT COUNT(*) FROM pow_fac_det d JOIN pow_fac_cab c ON c.id_s = d.id_s "
+                  "WHERE c.fecha BETWEEN %s AND %s")
+SQL_BORRAR_DET = ("DELETE d FROM pow_fac_det d JOIN pow_fac_cab c ON c.id_s = d.id_s "
+                  "WHERE c.fecha BETWEEN %s AND %s")
+SQL_BORRAR_CAB = "DELETE FROM pow_fac_cab WHERE fecha BETWEEN %s AND %s"
 LEGADO_DIAS_DEFAULT = 4
 
 SQL_LEER_SCRIPT = (
@@ -245,7 +253,7 @@ def dame_ejercicio_activo(con_ib, empresa):
     return row[0]
 
 
-def correr_legado(cfg, log, dry_run, dias):
+def correr_legado(cfg, log, dry_run, dias, desde=None, hasta=None, reemplazar=False):
     """Replica RecargarDatos + EjecutarScript de UDMG2Kweb.pas: llama al
     mismo POW_GENERA_SCRIPT (sin tocarlo) con las 4 piezas GENERA_CLI/FAC/
     AGE/ART activas (igual que la configuracion actual de produccion) y una
@@ -254,10 +262,13 @@ def correr_legado(cfg, log, dry_run, dias):
     interno de G2K (UFMain.TratarInformeAutomaticoDeG2Kweb), que requiere
     tener G2K.exe abierto -- esta pieza corre sola via tarea programada."""
     empresa = cfg.getint('gestion', 'empresa')
-    hasta = date.today()
-    desde = hasta - timedelta(days=dias)
+    hasta = hasta or date.today()
+    desde = desde or (hasta - timedelta(days=dias))
+    if desde > hasta:
+        raise ValueError('legado: desde (%s) es posterior a hasta (%s)' % (desde, hasta))
 
-    log.info('=== legado (POW_GENERA_SCRIPT) === desde=%s hasta=%s', desde, hasta)
+    log.info('=== legado (POW_GENERA_SCRIPT) === desde=%s hasta=%s%s', desde, hasta,
+             '  [REEMPLAZAR facturas del rango]' if reemplazar else '')
     con_ib = conectar_ib(cfg)
     try:
         ejercicio = dame_ejercicio_activo(con_ib, empresa)
@@ -277,10 +288,32 @@ def correr_legado(cfg, log, dry_run, dias):
         sentencias = armar_sentencias_legado(cur_ib)
         log.info('%d sentencia(s) a aplicar contra MySQL.', len(sentencias))
 
+        if reemplazar:
+            # Salvaguarda: si IB no devolvio ninguna cabecera de factura, NO borrar
+            # nada en MySQL (evita vaciar el rango por un SP que fallo o un rango
+            # sin datos).
+            n_cab = sum(1 for s in sentencias if _tabla_de(s) == 'pow_fac_cab')
+            if n_cab == 0:
+                raise RuntimeError(
+                    'reemplazar: IB no genero facturas para %s..%s; no se borra nada.' % (desde, hasta))
+            log.info('IB genero %d cabecera(s) de factura para el rango.', n_cab)
+
         if dry_run:
             for i, s in enumerate(sentencias, 1):
                 preview = s if len(s) <= 200 else s[:200] + '...'
                 log.info('  [DRY] %d (%d chars): %s', i, len(s), preview)
+            if reemplazar:
+                con_my = conectar_mysql(cfg)
+                try:
+                    cm = con_my.cursor()
+                    cm.execute(SQL_CONTAR_CAB, (desde, hasta))
+                    n_c = cm.fetchone()[0]
+                    cm.execute(SQL_CONTAR_DET, (desde, hasta))
+                    n_d = cm.fetchone()[0]
+                    log.info('  [DRY] se borrarian de MySQL %d cabecera(s) y %d detalle(s) '
+                             'con fecha %s..%s y se reinsertarian las de IB.', n_c, n_d, desde, hasta)
+                finally:
+                    con_my.close()
             return True
 
         for intento in (1, 2):
@@ -288,6 +321,16 @@ def correr_legado(cfg, log, dry_run, dias):
                 con_my = conectar_mysql(cfg)
                 try:
                     cur_my = con_my.cursor()
+                    if reemplazar:
+                        # Todo dentro de la misma transaccion (InnoDB): si algo falla
+                        # mas abajo, el rollback deja el rango tal como estaba.
+                        cur_my.execute(SQL_CONTAR_CAB, (desde, hasta))
+                        n_c = cur_my.fetchone()[0]
+                        cur_my.execute(SQL_BORRAR_DET, (desde, hasta))
+                        n_d = cur_my.rowcount
+                        cur_my.execute(SQL_BORRAR_CAB, (desde, hasta))
+                        log.info('reemplazar: borradas %d cabecera(s) y %d detalle(s) de MySQL '
+                                 '(%s..%s), se reinsertan las de IB.', cur_my.rowcount, n_d, desde, hasta)
                     tablas_vistas = set()
                     for s in sentencias:
                         s = s.strip()
@@ -380,7 +423,19 @@ def main():
     ap.add_argument('--legado-dias', type=int, default=LEGADO_DIAS_DEFAULT,
                      help='solo para la pieza "legado": dias hacia atras desde hoy (default %d)'
                           % LEGADO_DIAS_DEFAULT)
+    ap.add_argument('--legado-desde', type=lambda s: datetime.strptime(s, '%Y-%m-%d').date(),
+                     default=None, help='solo "legado": fecha desde (AAAA-MM-DD); reemplaza a --legado-dias')
+    ap.add_argument('--legado-hasta', type=lambda s: datetime.strptime(s, '%Y-%m-%d').date(),
+                     default=None, help='solo "legado": fecha hasta (AAAA-MM-DD), default hoy')
+    ap.add_argument('--reemplazar-facturas', action='store_true',
+                     help='solo "legado": BORRA de MySQL las facturas (pow_fac_cab/det) del rango '
+                          'y las reinserta desde IB, para reflejar facturas modificadas o '
+                          'anuladas. Requiere --legado-desde. Usar --dry-run antes.')
     args = ap.parse_args()
+    if args.reemplazar_facturas and not args.legado_desde:
+        ap.error('--reemplazar-facturas requiere --legado-desde AAAA-MM-DD (rango explicito)')
+    if args.reemplazar_facturas and 'all' in args.piezas:
+        ap.error('--reemplazar-facturas solo se puede usar con la pieza "legado", no con "all"')
 
     log = logging.getLogger('pow_etl')
     log.setLevel(logging.INFO)
@@ -411,7 +466,9 @@ def main():
     for pieza in piezas:
         try:
             if pieza == PIEZA_LEGADO:
-                resultado = correr_legado(cfg, log, args.dry_run, args.legado_dias)
+                resultado = correr_legado(cfg, log, args.dry_run, args.legado_dias,
+                                          args.legado_desde, args.legado_hasta,
+                                          args.reemplazar_facturas)
             else:
                 resultado = correr_pieza(pieza, cfg, log, args.dry_run, valores)
             if not resultado:
